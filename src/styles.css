@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 自定义风格，可加轻微磨砂效果和阴影，让界面更有质感 */
+.backdrop {
+    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.6);
+}
