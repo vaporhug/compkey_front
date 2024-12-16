@@ -5,7 +5,7 @@
       <h2 class="text-lg font-semibold mb-4 text-gray-200">竞争性关键字</h2>
       <ul class="flex-grow">
         <li
-            v-for="keyword in relatedKeywords"
+            v-for="keyword in sortedRelatedKeywords"
             :key="keyword.id"
             class="flex items-center justify-between bg-gray-700 bg-opacity-60 p-2 mb-2 rounded-lg hover:bg-gray-600 transition"
         >
@@ -20,7 +20,7 @@
                 @click="submitFeedback(keyword.id, true)"
                 class="text-green-500 hover:text-green-300 transition"
                 aria-label="点赞"
-                :disabled="feedbackStatus[keyword.id]"
+                :disabled="isFeedbackDisabled( keyword.id)"
             >
               <!-- 大拇指图标 -->
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
@@ -31,7 +31,7 @@
                 @click="submitFeedback(keyword.id, false)"
                 class="text-red-500 hover:text-red-300 transition"
                 aria-label="点踩"
-                :disabled="feedbackStatus[keyword.id]"
+                :disabled="isFeedbackDisabled(keyword.id)"
             >
               <!-- 小拇指图标 -->
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
@@ -165,7 +165,8 @@
 import NodeGraph from '../components/NodeGraph.vue'
 import { analyzeKeyword } from '../api/keyword'
 import { sendFeedback } from '../api/feedback'
-import { getAIDetailedAnalysis, deepSearchKeyword } from '../api/ai' // 导入 deepSearchKeyword
+import { getAIDetailedAnalysis, deepSearchKeyword } from '../api/ai'
+import axios from "axios"; // 导入 deepSearchKeyword
 
 export default {
   name: 'Analysis',
@@ -185,10 +186,22 @@ export default {
       copySuccess: false, // 控制复制成功的反馈
       isDeepSearchLoading: false, // 控制深度搜索加载指示器显示
       hasPerformedDeepSearch: false, // 新增：是否已执行深度搜索
+
+      userFeedbackCounts: this.getUserFeedbackCounts(),
     }
   },
+  computed: {
+    sortedRelatedKeywords() {
+      return this.relatedKeywords
+          .slice() // 防止修改原数组
+          .sort((a, b) => b.score - a.score); // 按照分数降序排序
+    }
+  },
+
   async mounted() {
-    await this.loadKeywordData(this.keyword)
+    await this.loadKeywordData(this.keyword);
+    this.userFeedbackCounts = { true: 0, false: 0 }; // 重置用户的反馈计数
+    this.getUserIP(); // 获取用户的IP
   },
   methods: {
     async loadKeywordData(keyword) {
@@ -211,7 +224,7 @@ export default {
         // 构造竞争节点和虚化小节点
         related.forEach((r) => {
           // 竞争节点
-          this.graphNodes.push({ id: r.keyword, type: 'competitor', score: r.score })
+          this.graphNodes.push({ id: r.keyword, type: 'competitor'})
           // 为竞争节点添加小型虚化节点
           for (let i = 0; i < 3; i++) {
             this.graphNodes.push({
@@ -226,7 +239,6 @@ export default {
         this.graphLinks = related.map((r) => ({
           source: "keyword",
           target: r.keyword,
-          value: r.score
         }))
 
         // 构造小型节点的连接
@@ -247,27 +259,83 @@ export default {
         await this.loadKeywordData(node.id)
       }
     },
-    async submitFeedback(keywordId, isThumbsUp) {
-      if (this.feedbackStatus[keywordId]) {
-        // 已经反馈过，避免重复提交
-        return
-      }
 
-      try {
-        const response = await sendFeedback({keyword: keywordId, positive: isThumbsUp})
-        if (response.status === 'success') {
-          // 标记该关键字已反馈
-          this.$set(this.feedbackStatus, keywordId, true)
-          // 显示反馈成功的提示信息
-          this.showSubmissionMessage('反馈已提交，谢谢您的参与！')
-        } else {
-          // 反馈失败，显示错误信息
-          this.showSubmissionMessage('反馈提交失败，请稍后再试。')
-        }
-      } catch (error) {
-        console.error('反馈提交错误:', error)
-        this.showSubmissionMessage('发生错误，请检查网络或稍后再试。')
+    // 获取用户的IP
+    getUserIP() {
+      // 使用 axios 请求 ipify API 获取用户的真实IP
+      axios.get('https://api.ipify.org?format=json')
+          .then(response => {
+            const userIP = response.data.ip;
+            console.log('用户IP:', userIP); // 打印 IP 地址
+            this.checkFeedbackStatus(userIP); // 根据 IP 地址检查用户反馈
+          })
+          .catch(error => {
+            console.error('获取用户 IP 出错:', error);
+          });
+    },
+
+    // 用来检查用户的反馈状态
+    checkFeedbackStatus(userIP) {
+      if (!this.feedbackStatus[userIP]) {
+        this.feedbackStatus[userIP] = { true: 0, false: 0 };
       }
+    },
+
+    // 获取用户的点赞和点踩次数
+    getUserFeedbackCounts() {
+      const userIP = this.getUserIP();
+      const feedbackCounts = JSON.parse(localStorage.getItem('userFeedbackCounts') || '{}');
+      if (!feedbackCounts[userIP]) {
+        feedbackCounts[userIP] = { true: 0, false: 0 }; // 初始次数为0
+      }
+      return feedbackCounts[userIP];
+    },
+
+    async submitFeedback(keywordId, isThumbsUp) {
+
+      const userIP = this.getUserIP();
+      if (this.userFeedbackCounts[isThumbsUp] < 5){
+        // 增加反馈次数
+        this.userFeedbackCounts[isThumbsUp]++;
+        this.feedbackStatus[keywordId] = isThumbsUp;
+        // 更新localStorage中的反馈次数
+        const feedbackCounts = JSON.parse(localStorage.getItem('userFeedbackCounts') || '{}');
+        feedbackCounts[userIP] = this.userFeedbackCounts;
+        localStorage.setItem('userFeedbackCounts', JSON.stringify(feedbackCounts));
+
+
+
+        try {
+          console.log('this.feedbackStatus:', this.feedbackStatus);
+          const response = await sendFeedback(keywordId, isThumbsUp, this.relatedKeywords)
+          console.log('已反馈的状态:', response.status)
+          if (response.status === 'success') {
+            // 标记该关键字已反馈
+            this.feedbackStatus[keywordId]=true
+            console.log('this.feedbackStatus:', this.feedbackStatus);
+            // 更新 relatedKeywords 为返回的更新后的值
+            this.relatedKeywords = response.updatedKeywords;
+            // 显示反馈成功的提示信息
+            this.showSubmissionMessage('反馈已提交，谢谢您的参与！')
+          } else {
+            // 反馈失败，显示错误信息
+            this.showSubmissionMessage('反馈提交失败，请稍后再试。')
+          }
+        } catch (error) {
+          console.error('反馈提交错误:', error)
+          console.error('错误详情:', error.response || error.message || error)
+          this.showSubmissionMessage('发生错误，请检查网络或稍后再试。')
+        }
+      }
+      else {
+        // 超过限制次数，提示
+        this.submissionMessage = `您已超过最多的${isThumbsUp === true ? '点赞' : '点踩'}次数限制。`;
+        this.showSubmissionMessage(this.submissionMessage)
+      }
+    },
+    // 判断是否禁用按钮
+    isFeedbackDisabled( keywordId) {
+      return this.userFeedbackCounts[true] >= 5 || this.feedbackStatus[keywordId] ||this.userFeedbackCounts[true] >= 5;
     },
     showSubmissionMessage(message) {
       this.submissionMessage = message

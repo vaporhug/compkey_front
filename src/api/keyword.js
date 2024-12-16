@@ -9,7 +9,7 @@ export async function analyzeKeyword(keyword) {
             competition_score: 75.3,
             related_keywords: [
                 { keyword: "华为", score: 70.0 },
-                { keyword: "三星", score: 60.5 },
+                { keyword: "三星", score: 80.0 },
                 { keyword: "小米", score: 65.2 },
                 { keyword: "OPO", score: 55.0 },
                 { keyword: "OPP", score: 55.0 },
