@@ -20,7 +20,7 @@
                 @click="submitFeedback(keyword.id, true)"
                 class="text-green-500 hover:text-green-300 transition"
                 aria-label="点赞"
-                :disabled="isFeedbackDisabled( keyword.id)"
+                :disabled="isFeedbackDisabled(keyword.id)"
             >
               <!-- 大拇指图标 -->
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
@@ -141,7 +141,7 @@
           </div>
 
           <!-- Modal Content -->
-          <div class="flex-grow overflow-y-auto">
+          <div class="flex-grow overflow-y-auto markdown-body prose prose-invert">
             <!-- 加载指示器 -->
             <div v-if="isLoadingAnalysis" class="flex justify-center items-center my-4">
               <svg class="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -151,9 +151,7 @@
             </div>
 
             <!-- AI 分析内容 -->
-            <div v-else class="text-gray-300 whitespace-pre-wrap">
-              {{ currentAnalysis.content }}
-            </div>
+            <div v-else v-html="formattedAnalysisContent"></div>
           </div>
         </div>
       </div>
@@ -167,6 +165,8 @@ import { analyzeKeyword } from '../api/keyword'
 import { sendFeedback } from '../api/feedback'
 import { getAIDetailedAnalysis, deepSearchKeyword } from '../api/ai'
 import axios from "axios"; // 导入 deepSearchKeyword
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 export default {
   name: 'Analysis',
@@ -187,7 +187,8 @@ export default {
       isDeepSearchLoading: false, // 控制深度搜索加载指示器显示
       hasPerformedDeepSearch: false, // 新增：是否已执行深度搜索
 
-      userFeedbackCounts: this.getUserFeedbackCounts(),
+      userFeedbackCounts: { true: 0, false: 0 }, // 初始化用户反馈计数
+      userIP: '', // 存储用户的IP地址
     }
   },
   computed: {
@@ -195,16 +196,25 @@ export default {
       return this.relatedKeywords
           .slice() // 防止修改原数组
           .sort((a, b) => b.score - a.score); // 按照分数降序排序
+    },
+    formattedAnalysisContent() {
+      // 使用 marked 将 Markdown 转换为 HTML
+      const rawHtml = marked(this.currentAnalysis.content)
+      // 使用 DOMPurify 进行消毒，防止 XSS
+      return DOMPurify.sanitize(rawHtml)
     }
   },
 
   async mounted() {
-    await this.loadKeywordData(this.keyword);
-    this.userFeedbackCounts = { true: 0, false: 0 }; // 重置用户的反馈计数
     this.getUserIP(); // 获取用户的IP
+    await this.loadKeywordData(this.keyword);
+    this.userFeedbackCounts={ true: 0, false: 0 };
   },
   methods: {
     async loadKeywordData(keyword) {
+      // 重置反馈提交提示信息
+      this.submissionMessage = ''
+
       const res = await analyzeKeyword(keyword)
       if (res.status === 'success') {
         const related = res.data.related_keywords
@@ -224,7 +234,7 @@ export default {
         // 构造竞争节点和虚化小节点
         related.forEach((r) => {
           // 竞争节点
-          this.graphNodes.push({ id: r.keyword, type: 'competitor'})
+          this.graphNodes.push({ id: r.keyword, type: 'competitor', score: r.score })
           // 为竞争节点添加小型虚化节点
           for (let i = 0; i < 3; i++) {
             this.graphNodes.push({
@@ -239,6 +249,7 @@ export default {
         this.graphLinks = related.map((r) => ({
           source: "keyword",
           target: r.keyword,
+          value: r.score
         }))
 
         // 构造小型节点的连接
@@ -251,6 +262,10 @@ export default {
             })
           }
         })
+
+        // 重置反馈状态（可选）
+        // this.feedbackStatus = {} // 如果需要在加载新关键字时清除所有反馈状态
+
       }
     },
     async handleNodeClick(node) {
@@ -261,81 +276,92 @@ export default {
     },
 
     // 获取用户的IP
-    getUserIP() {
-      // 使用 axios 请求 ipify API 获取用户的真实IP
-      axios.get('https://api.ipify.org?format=json')
-          .then(response => {
-            const userIP = response.data.ip;
-            console.log('用户IP:', userIP); // 打印 IP 地址
-            this.checkFeedbackStatus(userIP); // 根据 IP 地址检查用户反馈
-          })
-          .catch(error => {
-            console.error('获取用户 IP 出错:', error);
-          });
+    async getUserIP() {
+      try {
+        const response = await axios.get('https://api.ipify.org?format=json')
+        this.userIP = response.data.ip
+        console.log('用户IP:', this.userIP) // 打印 IP 地址
+        this.checkFeedbackStatus(this.userIP) // 根据 IP 地址检查用户反馈
+        this.userFeedbackCounts = this.getUserFeedbackCounts() // 更新用户反馈计数
+      } catch (error) {
+        console.error('获取用户 IP 出错:', error)
+      }
     },
 
     // 用来检查用户的反馈状态
     checkFeedbackStatus(userIP) {
       if (!this.feedbackStatus[userIP]) {
-        this.feedbackStatus[userIP] = { true: 0, false: 0 };
+        this.feedbackStatus[userIP] = { true: 0, false: 0 }
       }
+      // 可根据需求从后端或其他存储中获取用户的反馈状态
     },
 
     // 获取用户的点赞和点踩次数
     getUserFeedbackCounts() {
-      const userIP = this.getUserIP();
-      const feedbackCounts = JSON.parse(localStorage.getItem('userFeedbackCounts') || '{}');
-      if (!feedbackCounts[userIP]) {
-        feedbackCounts[userIP] = { true: 0, false: 0 }; // 初始次数为0
+      if (!this.userIP) return { true: 0, false: 0 }
+      const feedbackCounts = JSON.parse(localStorage.getItem('userFeedbackCounts') || '{}')
+      if (!feedbackCounts[this.userIP]) {
+        feedbackCounts[this.userIP] = { true: 0, false: 0 } // 初始次数为0
       }
-      return feedbackCounts[userIP];
+      return feedbackCounts[this.userIP]
     },
 
     async submitFeedback(keywordId, isThumbsUp) {
-
-      const userIP = this.getUserIP();
-      if (this.userFeedbackCounts[isThumbsUp] < 5){
-        // 增加反馈次数
-        this.userFeedbackCounts[isThumbsUp]++;
-        this.feedbackStatus[keywordId] = isThumbsUp;
-        // 更新localStorage中的反馈次数
-        const feedbackCounts = JSON.parse(localStorage.getItem('userFeedbackCounts') || '{}');
-        feedbackCounts[userIP] = this.userFeedbackCounts;
-        localStorage.setItem('userFeedbackCounts', JSON.stringify(feedbackCounts));
-
-
-
-        try {
-          console.log('this.feedbackStatus:', this.feedbackStatus);
-          const response = await sendFeedback(keywordId, isThumbsUp, this.relatedKeywords)
-          console.log('已反馈的状态:', response.status)
-          if (response.status === 'success') {
-            // 标记该关键字已反馈
-            this.feedbackStatus[keywordId]=true
-            console.log('this.feedbackStatus:', this.feedbackStatus);
-            // 更新 relatedKeywords 为返回的更新后的值
-            this.relatedKeywords = response.updatedKeywords;
-            // 显示反馈成功的提示信息
-            this.showSubmissionMessage('反馈已提交，谢谢您的参与！')
-          } else {
-            // 反馈失败，显示错误信息
-            this.showSubmissionMessage('反馈提交失败，请稍后再试。')
-          }
-        } catch (error) {
-          console.error('反馈提交错误:', error)
-          console.error('错误详情:', error.response || error.message || error)
-          this.showSubmissionMessage('发生错误，请检查网络或稍后再试。')
-        }
+      if (!this.userIP) {
+        this.showSubmissionMessage('无法获取用户IP，请稍后再试。')
+        return
       }
-      else {
+
+      if (this.userFeedbackCounts[isThumbsUp] >= 5) {
         // 超过限制次数，提示
-        this.submissionMessage = `您已超过最多的${isThumbsUp === true ? '点赞' : '点踩'}次数限制。`;
+        this.submissionMessage = `您已超过最多的${isThumbsUp ? '点赞' : '点踩'}次数限制。`
         this.showSubmissionMessage(this.submissionMessage)
+        return
+      }
+
+      if (this.feedbackStatus[keywordId]) {
+        // 已经反馈过，避免重复提交
+        this.showSubmissionMessage('您已经对这个关键字进行了反馈。')
+        return
+      }
+
+      try {
+        // 增加反馈次数
+        this.userFeedbackCounts[isThumbsUp]++
+        // 标记该关键字已反馈
+        this.feedbackStatus[keywordId] = isThumbsUp
+        // 更新 localStorage 中的反馈次数
+        const feedbackCounts = JSON.parse(localStorage.getItem('userFeedbackCounts') || '{}')
+        if (!feedbackCounts[this.userIP]) {
+          feedbackCounts[this.userIP] = { true: 0, false: 0 }
+        }
+        feedbackCounts[this.userIP][isThumbsUp] = this.userFeedbackCounts[isThumbsUp]
+        localStorage.setItem('userFeedbackCounts', JSON.stringify(feedbackCounts))
+
+        // 发送反馈到后端
+        const response = await sendFeedback(keywordId, isThumbsUp, this.relatedKeywords)
+        console.log('已反馈的状态:', response.status)
+        if (response.status === 'success') {
+          // 更新 relatedKeywords 为返回的更新后的值
+          this.relatedKeywords = response.updatedKeywords
+          // 显示反馈成功的提示信息
+          this.showSubmissionMessage('反馈已提交，谢谢您的参与！')
+        } else {
+          // 反馈失败，显示错误信息
+          this.showSubmissionMessage('反馈提交失败，请稍后再试。')
+        }
+      } catch (error) {
+        console.error('反馈提交错误:', error)
+        this.showSubmissionMessage('发生错误，请检查网络或稍后再试。')
       }
     },
     // 判断是否禁用按钮
-    isFeedbackDisabled( keywordId) {
-      return this.userFeedbackCounts[true] >= 5 || this.feedbackStatus[keywordId] ||this.userFeedbackCounts[true] >= 5;
+    isFeedbackDisabled(keywordId) {
+      return (
+          this.userFeedbackCounts[true] >= 5 ||
+          this.userFeedbackCounts[false] >= 5 ||
+          this.feedbackStatus[keywordId]
+      )
     },
     showSubmissionMessage(message) {
       this.submissionMessage = message
@@ -377,7 +403,7 @@ export default {
     },
     closeAnalysisModal() {
       this.showAnalysisModal = false
-      this.currentAnalysis = {keyword: '', content: ''}
+      this.currentAnalysis = { keyword: '', content: '' }
       this.copySuccess = false // 在关闭模态框时重置复制状态
     },
     copyToClipboard() {
@@ -412,11 +438,11 @@ export default {
           }))
 
           // 更新图表数据
-          this.graphNodes = [{id: "keyword", type: 'center'}]
+          this.graphNodes = [{ id: "keyword", type: 'center' }]
 
           related.forEach((r) => {
             // 竞争节点
-            this.graphNodes.push({id: r.keyword, type: 'competitor', score: r.score})
+            this.graphNodes.push({ id: r.keyword, type: 'competitor', score: r.score })
             // 为竞争节点添加小型虚化节点
             for (let i = 0; i < 3; i++) {
               this.graphNodes.push({
@@ -511,4 +537,111 @@ button:disabled {
 
 /* 加载指示器样式 */
 /* 使用 Tailwind 的内置类，无需额外定义 */
+
+/* 添加 Markdown 样式 */
+.markdown-body {
+  /* 基本的 Markdown 样式 */
+  line-height: 1.6;
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  color: #fff;
+}
+
+.markdown-body p {
+  color: #d1d5db;
+}
+
+.markdown-body a {
+  color: #3b82f6;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5rem;
+}
+
+.markdown-body blockquote {
+  border-left: 4px solid #3b82f6;
+  padding-left: 1rem;
+  color: #d1d5db;
+}
+
+.markdown-body code {
+  background-color: rgba(255, 255, 255, 0.1);
+  padding: 0.2rem 0.4rem;
+  border-radius: 0.25rem;
+  color: #f3f4f6;
+}
+
+.markdown-body pre {
+  background-color: rgba(255, 255, 255, 0.1);
+  padding: 1rem;
+  border-radius: 0.25rem;
+  overflow-x: auto;
+}
+
+.markdown-body img {
+  max-width: 100%;
+}
+
+/* 使用 Tailwind CSS 的 Prose 插件可以自动添加更丰富的样式 */
+/* 如果您使用了 Tailwind CSS 的 Typography 插件，可以替换 .markdown-body 为 prose prose-invert */
+/* 以获得更好的 Markdown 样式支持 */
+
+.prose {
+  @apply max-w-none;
+}
+
+.prose-invert h1,
+.prose-invert h2,
+.prose-invert h3,
+.prose-invert h4,
+.prose-invert h5,
+.prose-invert h6 {
+  color: #fff;
+}
+
+.prose-invert p {
+  color: #d1d5db;
+}
+
+.prose-invert a {
+  color: #3b82f6;
+}
+
+.prose-invert ul,
+.prose-invert ol {
+  padding-left: 1.5rem;
+}
+
+.prose-invert blockquote {
+  border-left: 4px solid #3b82f6;
+  padding-left: 1rem;
+  color: #d1d5db;
+}
+
+.prose-invert code {
+  background-color: rgba(255, 255, 255, 0.1);
+  padding: 0.2rem 0.4rem;
+  border-radius: 0.25rem;
+  color: #f3f4f6;
+}
+
+.prose-invert pre {
+  background-color: rgba(255, 255, 255, 0.1);
+  padding: 1rem;
+  border-radius: 0.25rem;
+  overflow-x: auto;
+}
+
+.prose-invert img {
+  max-width: 100%;
+}
 </style>
