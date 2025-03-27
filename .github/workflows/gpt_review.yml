@@ -13,21 +13,6 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
-      - name: Debug - Check if Key Exists
-        run: |
-          if [ -n "${{ secrets.DEEPSEEK_API_KEY }}" ]; then
-            echo "✅ 密钥已成功读取"
-          else
-            echo "❌ 未检测到密钥，请检查 Secrets 配置"
-          fi
-
-      - name: Debug - Check if github key Exists
-        run: |
-          if [ -n "${{ github.token }}" ]; then
-            echo "✅ git密钥已成功读取"
-          else
-            echo "❌ git未检测到密钥，请检查 Secrets 配置"
-          fi
           
       - name: Code Review GPT
         uses: mattzcarey/code-review-gpt@v0.8.0
