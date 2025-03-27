@@ -5,10 +5,14 @@ name: Code Review GPT
 on:
   pull_request:
     branches: [master]
-
+  
 jobs:
   run_code_review:
     runs-on: ubuntu-latest
+    permissions:  
+      pull-requests: write  
+      contents: read       
+
     steps:
       - uses: actions/checkout@v3
         with:
@@ -16,6 +20,8 @@ jobs:
           
       - name: Code Review GPT
         uses: mattzcarey/code-review-gpt@v0.8.0
+        env:
+          DEBUG: "true"  
         with:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }} 
