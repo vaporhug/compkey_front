@@ -1,0 +1,41 @@
+name: Run Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # 矩阵策略示例（测试多个语言版本）
+    strategy:
+      matrix:
+        node-version: [16.x, 18.x]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # Node.js 项目设置（与Python二选一）
+    - name: Set up Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+
+    # 公共测试步骤 ------------------------------
+    - name: Run tests
+      run: |        
+        npm test
+
+    # 可选测试覆盖率上传（示例）
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
